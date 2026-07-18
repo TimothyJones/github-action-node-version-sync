@@ -1,0 +1,72 @@
+import { writeFile } from "node:fs/promises";
+import * as exec from "@actions/exec";
+import type { ReconcileResult } from "./core.js";
+
+export interface GitOptions {
+  cwd: string;
+  branch: string;
+  base: string;
+  owner: string;
+  repo: string;
+  token: string;
+  userName: string;
+  userEmail: string;
+  /** Override the push remote URL (defaults to the token-authenticated GitHub URL). Used by tests. */
+  remoteUrl?: string;
+}
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const out = await exec.getExecOutput("git", args, { cwd, silent: true });
+  return out.stdout.trim();
+}
+
+/**
+ * Commit each group as its own commit on a fresh working branch, then force-push.
+ * Edits are applied to an in-memory content map and written to disk incrementally
+ * so each commit contains only that version's changes.
+ */
+export async function commitAndPush(
+  result: ReconcileResult,
+  opts: GitOptions,
+): Promise<void> {
+  await git(opts.cwd, ["config", "user.name", opts.userName]);
+  await git(opts.cwd, ["config", "user.email", opts.userEmail]);
+
+  const remote =
+    opts.remoteUrl ??
+    `https://x-access-token:${opts.token}@github.com/${opts.owner}/${opts.repo}.git`;
+  await git(opts.cwd, ["remote", "set-url", "origin", remote]);
+
+  // Start the working branch from the base branch.
+  await git(opts.cwd, ["fetch", "origin", opts.base, "--depth=1"]);
+  await git(opts.cwd, ["checkout", "-B", opts.branch, `origin/${opts.base}`]);
+
+  const contents = new Map(result.originals);
+  for (const group of result.groups) {
+    for (const plan of group.plans) {
+      const current = contents.get(plan.path) ?? "";
+      const updated = plan.apply(current, {
+        kind: group.kind,
+        major: group.major,
+      });
+      contents.set(plan.path, updated);
+      await writeFile(plan.path, updated, "utf8");
+      await git(opts.cwd, ["add", plan.path]);
+    }
+    // Defensive: never fail the run on an empty commit if a group staged no net change.
+    const staged = await exec.getExecOutput(
+      "git",
+      ["diff", "--cached", "--quiet"],
+      {
+        cwd: opts.cwd,
+        silent: true,
+        ignoreReturnCode: true,
+      },
+    );
+    if (staged.exitCode !== 0) {
+      await git(opts.cwd, ["commit", "-m", group.message]);
+    }
+  }
+
+  await git(opts.cwd, ["push", "--force", "origin", opts.branch]);
+}
