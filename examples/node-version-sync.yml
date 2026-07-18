@@ -1,0 +1,19 @@
+# Copy this into a consuming repository at .github/workflows/node-version-sync.yml
+name: Node Version Sync
+on:
+  schedule:
+    - cron: "0 6 * * 1" # every Monday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: your-org/node-version-sync@v1
+        # with:
+        #   token: ${{ secrets.SYNC_PAT }} # use a PAT/app token to let the PR trigger other workflows

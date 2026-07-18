@@ -1,0 +1,107 @@
+# Node Version Sync
+
+A GitHub Action that keeps the Node.js versions declared across your repository in
+sync with the [official Node.js release schedule](https://github.com/nodejs/Release),
+and opens a pull request with the changes.
+
+On each run it:
+
+1. Fetches the live release schedule.
+2. Reconciles every place Node versions are declared (see [What it edits](#what-it-edits)).
+3. Opens **one PR** with a separate commit per version added or dropped.
+
+## What it edits
+
+| Location                                                                         | Rule                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A CI **matrix** feeding `actions/setup-node` (e.g. `matrix: node: [18, 20, 22]`) | Must contain **all active even (LTS) majors** — missing ones are added, end-of-life ones are removed.                                                                                                                        |
+| A **single `node-version:` pin** on `actions/setup-node`                         | Left alone while its major is still supported; once it reaches end-of-life it is bumped to the **newest even active** major.                                                                                                 |
+| **`.nvmrc`**                                                                     | Treated as a single-version pin (same rule as above).                                                                                                                                                                        |
+| **`package.json` `engines.node`**                                                | The floor is raised to `>=<lowest even active>.0.0` **only when the current floor is below it**. A floor already at or above the lowest even active (e.g. `>=20.19`) is left untouched. Absent `engines.node` is left alone. |
+
+A "version" is only touched when written as a concrete number (`20`, `"20"`, `20.x`,
+`20.11.1`). Aliases such as `lts/*`, `latest`, and codenames are never changed or removed.
+
+### Commits and PR title
+
+Each change is its own commit:
+
+- `feat: Add support for node version X`
+- `feat!: Drop support for node version X`
+
+The PR title is composed from all the changes:
+
+- adds only — `feat: Add support for node version 22, 24`
+- drops only — `feat!: Drop support for node version 18`
+- both — `feat!: Add support for node version 24, drop support for node version 18`
+
+The `!` (breaking-change marker) appears whenever anything is dropped.
+
+## Usage
+
+Run it on a schedule so your matrices stay current automatically:
+
+```yaml
+# .github/workflows/node-version-sync.yml
+name: Node Version Sync
+on:
+  schedule:
+    - cron: "0 6 * * 1" # every Monday
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: your-org/node-version-sync@v1
+```
+
+> **Permissions:** the job needs `contents: write` and `pull-requests: write`.
+> To let this PR trigger other workflows, supply a PAT or app token via the `token`
+> input instead of the default `GITHUB_TOKEN`.
+
+## Inputs
+
+| Input          | Default                   | Description                                                                          |
+| -------------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| `token`        | `${{ github.token }}`     | Token used to push the branch and open the PR.                                       |
+| `schedule-url` | Node.js `schedule.json`   | URL (or local path) of the release schedule.                                         |
+| `base`         | repo default branch       | Base branch the PR targets.                                                          |
+| `branch`       | `chore/node-version-sync` | Working branch the PR is opened from.                                                |
+| `paths`        | _(auto-discover)_         | Newline/comma-separated explicit file paths to scan instead of auto-discovery.       |
+| `dry-run`      | `false`                   | Compute and log changes without committing or opening a PR.                          |
+| `now`          | _(today)_                 | Override the current date (`YYYY-MM-DD`) used to evaluate the schedule. Testing aid. |
+
+## Outputs
+
+| Output      | Description                                           |
+| ----------- | ----------------------------------------------------- |
+| `changed`   | `true` if any changes were made.                      |
+| `added`     | Comma-separated majors for which support was added.   |
+| `removed`   | Comma-separated majors for which support was dropped. |
+| `pr-url`    | URL of the created/updated PR (empty if none).        |
+| `pr-number` | Number of the created/updated PR (empty if none).     |
+
+## Development
+
+```bash
+npm install
+npm test           # vitest unit + integration tests
+npm run typecheck  # tsc --noEmit
+npm run build      # bundle src/ into dist/ with ncc (dist/ is committed)
+```
+
+`dist/` is the compiled entrypoint and **must be committed**; CI verifies it is up to date.
+
+## Notes and limitations
+
+- Matrix arrays are re-emitted compactly (`[20, 22, 24]`); comments and quote styles are preserved.
+- `strategy.matrix` list arrays are edited; `include`/`exclude`-only or `fromJSON(...)` matrices are
+  left untouched.
+- When workflows declare inconsistent matrices, a version newly added to one file produces an
+  `Add support` commit even if another file already listed it — after the run every matrix is complete.
