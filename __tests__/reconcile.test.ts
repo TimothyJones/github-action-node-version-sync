@@ -32,15 +32,18 @@ describe("prTitle", () => {
   it("drops only", () => {
     expect(prTitle([], [18])).toBe("feat!: Drop support for node version 18");
   });
-  it("both adds and drops (breaking)", () => {
-    expect(prTitle([24], [18])).toBe(
-      "feat!: Add support for node version 24, drop support for node version 18",
+  it("both adds and drops (breaking) — drops lead", () => {
+    expect(prTitle([26], [20])).toBe(
+      "feat!: Drop support for node version 20, add support for node version 26",
+    );
+    expect(prTitle([22, 24], [18])).toBe(
+      "feat!: Drop support for node version 18, add support for node version 22, 24",
     );
   });
 });
 
 describe("groupCommits", () => {
-  it("groups files by (kind, major) with adds first, then drops, ascending", () => {
+  it("groups files by (kind, major) with drops first, then adds, ascending", () => {
     const a = plan("a.yml", [
       { kind: "add", major: 24 },
       { kind: "drop", major: 18 },
@@ -49,11 +52,11 @@ describe("groupCommits", () => {
     const groups = groupCommits([a, b]);
 
     expect(groups.map((g) => g.message)).toEqual([
-      "feat: Add support for node version 24",
       "feat!: Drop support for node version 18",
+      "feat: Add support for node version 24",
     ]);
-    // The drop-18 group bundles both files.
-    expect(groups[1].plans).toHaveLength(2);
+    // The drop-18 group (now first) bundles both files.
+    expect(groups[0].plans).toHaveLength(2);
     expect(summarize(groups)).toEqual({ added: [24], removed: [18] });
   });
 });

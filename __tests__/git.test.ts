@@ -57,7 +57,8 @@ describe("commitAndPush", () => {
       remoteUrl: origin,
     });
 
-    // The branch exists on origin with the three expected commits, newest first.
+    // The branch exists on origin with the three expected commits, newest first:
+    // drops lead (committed first), then adds ascending.
     const log = git(
       origin,
       "log",
@@ -65,19 +66,20 @@ describe("commitAndPush", () => {
       "--format=%s",
     ).split("\n");
     expect(log.slice(0, 3)).toEqual([
-      "feat!: Drop support for node version 18",
       "feat: Add support for node version 24",
       "feat: Add support for node version 22",
+      "feat!: Drop support for node version 18",
     ]);
 
-    // Each commit is scoped to only its version's edits.
-    const dropDiff = git(
+    // The drop-18 commit bundles the .nvmrc and package.json (engines) edits.
+    const dropSha = git(
       origin,
-      "show",
-      "--name-only",
-      "--format=",
+      "log",
       "chore/node-version-sync",
+      "--format=%H",
+      "--grep=Drop support",
     );
+    const dropDiff = git(origin, "show", "--name-only", "--format=", dropSha);
     expect(dropDiff).toContain(".nvmrc");
     expect(dropDiff).toContain("package.json");
 

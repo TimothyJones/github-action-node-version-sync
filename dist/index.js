@@ -40353,11 +40353,18 @@ const nvmrcEditor = {
             return null;
         if (schedule.newestEven === undefined)
             return null;
-        const change = { kind: "drop", major: info.major };
+        // Bumping the pin both drops its (now EOL) major and introduces the newest even
+        // active major, so record it as both a drop and an add.
+        const changes = [
+            { kind: "drop", major: info.major },
+            { kind: "add", major: schedule.newestEven },
+        ];
         return {
             path,
-            changes: [change],
+            changes,
             apply(current, applied) {
+                // The bump is performed by the drop of the pin's current major; the paired
+                // add is a no-op here (it is reflected in the title/summary only).
                 const cur = read(current);
                 if (!cur || applied.kind !== "drop" || cur.major !== applied.major)
                     return current;
@@ -40475,7 +40482,10 @@ function groupCommits(plans) {
     const drops = [...groups.values()]
         .filter((g) => g.kind === "drop")
         .sort((a, b) => a.major - b.major);
-    return [...adds, ...drops];
+    // Drops (the breaking changes) lead, then adds ascending. The drop-set (inactive
+    // majors) and add-set (active-even majors) are always disjoint, so a file touched
+    // by both commits gets its net edit in whichever runs first.
+    return [...drops, ...adds];
 }
 /** The distinct majors added and dropped across all commit groups. */
 function summarize(groups) {
@@ -40487,7 +40497,7 @@ function summarize(groups) {
  * Build the composite PR title from the added/dropped majors.
  * - adds only:  `feat: Add support for X, Y`
  * - drops only: `feat!: Drop support for X, Y`
- * - both:       `feat!: Add support for X, drop support for Z`
+ * - both:       `feat!: Drop support for Z, add support for X`
  * The `!` (breaking) marker appears whenever anything is dropped.
  */
 function prTitle(added, removed) {
@@ -40495,7 +40505,7 @@ function prTitle(added, removed) {
     const d = [...removed].sort((x, y) => x - y);
     const list = (xs) => xs.join(", ");
     if (a.length && d.length) {
-        return `feat!: Add support for node version ${list(a)}, drop support for node version ${list(d)}`;
+        return `feat!: Drop support for node version ${list(d)}, add support for node version ${list(a)}`;
     }
     if (d.length) {
         return `feat!: Drop support for node version ${list(d)}`;
@@ -40681,8 +40691,12 @@ const workflowEditor = {
         }
         for (const pin of scalarPins) {
             const p = parseVersionLiteral(pin.value);
-            if (p && !schedule.isActive(p.major))
+            if (p && !schedule.isActive(p.major)) {
+                // Bumping the pin drops its EOL major and introduces the newest even active one.
                 record("drop", p.major);
+                if (schedule.newestEven !== undefined)
+                    record("add", schedule.newestEven);
+            }
         }
         if (changes.size === 0)
             return null;

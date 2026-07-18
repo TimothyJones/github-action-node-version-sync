@@ -77,7 +77,10 @@ export function groupCommits(plans: FilePlan[]): CommitGroup[] {
   const drops = [...groups.values()]
     .filter((g) => g.kind === "drop")
     .sort((a, b) => a.major - b.major);
-  return [...adds, ...drops];
+  // Drops (the breaking changes) lead, then adds ascending. The drop-set (inactive
+  // majors) and add-set (active-even majors) are always disjoint, so a file touched
+  // by both commits gets its net edit in whichever runs first.
+  return [...drops, ...adds];
 }
 
 /** The distinct majors added and dropped across all commit groups. */
@@ -94,7 +97,7 @@ export function summarize(groups: CommitGroup[]): {
  * Build the composite PR title from the added/dropped majors.
  * - adds only:  `feat: Add support for X, Y`
  * - drops only: `feat!: Drop support for X, Y`
- * - both:       `feat!: Add support for X, drop support for Z`
+ * - both:       `feat!: Drop support for Z, add support for X`
  * The `!` (breaking) marker appears whenever anything is dropped.
  */
 export function prTitle(added: number[], removed: number[]): string {
@@ -103,7 +106,7 @@ export function prTitle(added: number[], removed: number[]): string {
   const list = (xs: number[]) => xs.join(", ");
 
   if (a.length && d.length) {
-    return `feat!: Add support for node version ${list(a)}, drop support for node version ${list(d)}`;
+    return `feat!: Drop support for node version ${list(d)}, add support for node version ${list(a)}`;
   }
   if (d.length) {
     return `feat!: Drop support for node version ${list(d)}`;

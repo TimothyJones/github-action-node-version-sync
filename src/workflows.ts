@@ -215,7 +215,12 @@ export const workflowEditor: Editor = {
 
     for (const pin of scalarPins) {
       const p = parseVersionLiteral(pin.value);
-      if (p && !schedule.isActive(p.major)) record("drop", p.major);
+      if (p && !schedule.isActive(p.major)) {
+        // Bumping the pin drops its EOL major and introduces the newest even active one.
+        record("drop", p.major);
+        if (schedule.newestEven !== undefined)
+          record("add", schedule.newestEven);
+      }
     }
 
     if (changes.size === 0) return null;

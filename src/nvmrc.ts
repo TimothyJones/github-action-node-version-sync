@@ -26,11 +26,18 @@ export const nvmrcEditor: Editor = {
     if (schedule.isActive(info.major)) return null;
     if (schedule.newestEven === undefined) return null;
 
-    const change: VersionChange = { kind: "drop", major: info.major };
+    // Bumping the pin both drops its (now EOL) major and introduces the newest even
+    // active major, so record it as both a drop and an add.
+    const changes: VersionChange[] = [
+      { kind: "drop", major: info.major },
+      { kind: "add", major: schedule.newestEven },
+    ];
     return {
       path,
-      changes: [change],
+      changes,
       apply(current: string, applied: VersionChange): string {
+        // The bump is performed by the drop of the pin's current major; the paired
+        // add is a no-op here (it is reflected in the title/summary only).
         const cur = read(current);
         if (!cur || applied.kind !== "drop" || cur.major !== applied.major)
           return current;

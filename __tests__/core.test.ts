@@ -60,7 +60,7 @@ describe("reconcileRepo (integration over the fixture repo)", () => {
     expect(result.added).toEqual([22, 24]);
     expect(result.removed).toEqual([18]);
     expect(prTitle(result.added, result.removed)).toBe(
-      "feat!: Add support for node version 22, 24, drop support for node version 18",
+      "feat!: Drop support for node version 18, add support for node version 22, 24",
     );
   });
 

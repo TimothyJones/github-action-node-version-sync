@@ -87,7 +87,9 @@ describe("scalar pins", () => {
     const { result, changes } = reconcile(input);
     expect(result).toContain("node-version: 24");
     expect(result).toContain("node-version: 20");
-    expect(changes).toEqual([{ kind: "drop", major: 18 }]);
+    // Bumping the EOL pin drops 18 and introduces the newest even active (24).
+    expect(changes).toContainEqual({ kind: "drop", major: 18 });
+    expect(changes).toContainEqual({ kind: "add", major: 24 });
   });
 
   it("leaves non-numeric versions untouched", () => {

@@ -29,13 +29,17 @@ Each change is its own commit:
 - `feat: Add support for node version X`
 - `feat!: Drop support for node version X`
 
-The PR title is composed from all the changes:
+The PR title is composed from all the changes (drops lead, then adds):
 
 - adds only — `feat: Add support for node version 22, 24`
 - drops only — `feat!: Drop support for node version 18`
-- both — `feat!: Add support for node version 24, drop support for node version 18`
+- both — `feat!: Drop support for node version 18, add support for node version 24`
 
 The `!` (breaking-change marker) appears whenever anything is dropped.
+
+Bumping a single-version pin counts as **both** a drop of its old (EOL) major and an
+add of the new one — e.g. moving a `.nvmrc` from `20` to `26` yields
+`feat!: Drop support for node version 20, add support for node version 26`.
 
 ## Usage
 
