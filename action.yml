@@ -1,5 +1,5 @@
 name: "Keep Node Current"
-description: "Keep the repository's declared Node.js versions in sync with the official Node.js release schedule, opening a PR with the changes."
+description: "Keeps your repository's Node.js versions in sync with the official release schedule."
 author: "Timothy Jones"
 branding:
   icon: "refresh-cw"
