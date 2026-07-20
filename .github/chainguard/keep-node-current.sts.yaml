@@ -1,0 +1,10 @@
+# Trust policy for Octo STS (https://github.com/apps/octo-sts).
+# Lets the self-test workflow, running on main, mint a short-lived token with
+# exactly the permissions this action needs. Inert until the app is installed.
+issuer: https://token.actions.githubusercontent.com
+subject: repo:TimothyJones/github-action-keep-node-current:ref:refs/heads/main
+
+permissions:
+  contents: write
+  pull_requests: write
+  workflows: write

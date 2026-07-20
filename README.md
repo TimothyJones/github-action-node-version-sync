@@ -60,13 +60,20 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # lets the job federate its identity with Octo STS
     steps:
       - uses: actions/checkout@v4
-      - uses: TimothyJones/github-action-keep-node-current@v1
+      # Exchange this workflow's identity for a short-lived GitHub token.
+      # No stored secrets — see "Authentication" below.
+      - uses: octo-sts/action@main # pin to a release or SHA in production
+        id: octo-sts
         with:
-          # Authenticate as a GitHub App (recommended). See "Authentication" below.
-          app-id: ${{ vars.SYNC_APP_ID }}
-          private-key: ${{ secrets.SYNC_APP_KEY }}
+          scope: <owner>/<repo>
+          identity: keep-node-current
+      - uses: TimothyJones/github-action-keep-node-current@v2
+        with:
+          token: ${{ steps.octo-sts.outputs.token }}
 ```
 
 > **Why not the default `GITHUB_TOKEN`?** Because this action edits files under
@@ -78,39 +85,44 @@ jobs:
 
 The action commits, branches, and opens the PR entirely through the GitHub API, so it
 needs no special `actions/checkout` configuration — just a credential allowed to edit
-workflow files (the `workflow` scope / **Workflows: write** permission).
+workflow files (the `workflow` scope / **Workflows: write** permission), supplied via the
+`token` input.
 
-### Recommended — a GitHub App
+### Recommended — Octo STS (no stored secrets)
 
-A GitHub App is the intended path for CI automation: it mints a **short-lived
-installation token** per run (nothing to rotate — no expiring PAT), it isn't tied to a
-person, and PRs it opens can trigger other workflows.
+[Octo STS](https://github.com/octo-sts/app) exchanges a workflow's built-in OIDC identity
+for a **short-lived (1 hour) GitHub token**, scoped by a trust policy you commit to the
+repo. There is **no long-lived credential stored anywhere** — nothing to leak from repo
+settings, nothing to expire or rotate. The trust policy is reviewable code.
 
-1. **Create the App** — **Settings → Developer settings → GitHub Apps → New GitHub App**.
-   Under **Repository permissions** grant **Contents: Read and write**,
-   **Pull requests: Read and write**, and **Workflows: Read and write**. Generate a
-   **private key** (downloads a `.pem`).
-2. **Install it** on the repositories that will run the action.
-3. **Store the credentials** — the App id as a variable and the private key as a secret:
-   ```bash
-   gh variable set SYNC_APP_ID   --repo <owner>/<repo> --body <app-id>
-   gh secret   set SYNC_APP_KEY  --repo <owner>/<repo> < path/to/private-key.pem
-   ```
-4. **Reference them** (as in [Usage](#usage) above):
+1. **Install the [Octo STS app](https://github.com/apps/octo-sts)** on the repo(s) that
+   will run this action.
+2. **Commit a trust policy** at `.github/chainguard/keep-node-current.sts.yaml`:
+
    ```yaml
-   with:
-     app-id: ${{ vars.SYNC_APP_ID }}
-     private-key: ${{ secrets.SYNC_APP_KEY }}
+   issuer: https://token.actions.githubusercontent.com
+   # Only this repo's sync workflow, running on main, may mint this token:
+   subject: repo:<owner>/<repo>:ref:refs/heads/main
+
+   permissions:
+     contents: write
+     pull_requests: write
+     workflows: write
    ```
 
-The action mints the installation token itself — no extra steps. (Alternatively, mint the
-token with the official [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token)
-and pass it via `token:`.)
+3. **Mint the token in the workflow and pass it in** (as in [Usage](#usage) above): the
+   job needs `permissions: id-token: write`, the
+   [`octo-sts/action`](https://github.com/octo-sts/action) step exchanges the identity
+   (`identity` = the policy filename without `.sts.yaml`), and its `token` output goes to
+   this action's `token` input.
 
-### Simpler fallback — a Personal Access Token
+Octo STS is an open-source hosted service by Chainguard; if a third-party broker doesn't
+fit your threat model, use a PAT below (or self-host Octo STS).
 
-If you don't want to set up an App, use a PAT via the `token` input. Note PATs expire and
-are tied to your account, so you'll have to rotate them.
+### Fallback — a Personal Access Token
+
+A PAT works with no third-party involvement. Note PATs expire and are tied to your
+account, so you'll have to rotate them.
 
 - **Fine-grained PAT:** _Only select repositories_ → the target repo(s); permissions
   **Contents**, **Pull requests**, and **Workflows** = _Read and write_.
@@ -123,6 +135,10 @@ with:
   token: ${{ secrets.SYNC_PAT }}
 ```
 
+> **Hardening tip:** put the secret in a GitHub **Environment** restricted to your default
+> branch (optionally with required reviewers) and reference that environment from the sync
+> job — then other workflows and PR branches cannot read it.
+
 The default `GITHUB_TOKEN` works **only** if none of the changed files are workflows
 (e.g. you limit scope to `.nvmrc` / `package.json` via the `paths` input).
 
@@ -134,16 +150,14 @@ The default `GITHUB_TOKEN` works **only** if none of the changed files are workf
   approve pull requests"** must be enabled.
 
 Commits are authored as `github-actions[bot]`; the PR is opened by the token's owner.
-Using a PAT/App token (rather than `GITHUB_TOKEN`) also lets the opened PR trigger other
-workflows, such as CI.
+Using an Octo STS token or PAT (rather than `GITHUB_TOKEN`) also lets the opened PR
+trigger other workflows, such as CI.
 
 ## Inputs
 
 | Input          | Default                   | Description                                                                          |
 | -------------- | ------------------------- | ------------------------------------------------------------------------------------ |
-| `app-id`       | _(none)_                  | GitHub App id. With `private-key`, authenticates as the App (recommended).           |
-| `private-key`  | _(none)_                  | GitHub App private key (PEM). Required alongside `app-id`.                           |
-| `token`        | `${{ github.token }}`     | Token used when `app-id`/`private-key` are not set. Needs the `workflow` scope.      |
+| `token`        | `${{ github.token }}`     | Token for commits/branch/PR. Needs the `workflow` scope; Octo STS token recommended. |
 | `schedule-url` | Node.js `schedule.json`   | URL (or local path) of the release schedule.                                         |
 | `base`         | repo default branch       | Base branch the PR targets.                                                          |
 | `branch`       | `chore/node-version-sync` | Working branch the PR is opened from.                                                |

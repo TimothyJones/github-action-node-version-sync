@@ -1,24 +1,28 @@
 # Copy this into a consuming repository at .github/workflows/node-version-sync.yml
+#
+# Recommended auth: Octo STS — no stored secrets. Install the app
+# (https://github.com/apps/octo-sts) and commit a trust policy at
+# .github/chainguard/keep-node-current.sts.yaml — see the README.
+# Fallback: a PAT with repo + workflow scopes, via `token: ${{ secrets.SYNC_PAT }}`.
+# The default GITHUB_TOKEN cannot modify files under .github/workflows/.
 name: Keep Node Current
 on:
   schedule:
     - cron: "0 6 * * 1" # every Monday at 06:00 UTC
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # federate this job's identity with Octo STS
     steps:
       - uses: actions/checkout@v4
-      - uses: TimothyJones/github-action-keep-node-current@v1
+      - uses: octo-sts/action@main # pin to a release or SHA in production
+        id: octo-sts
         with:
-          # Recommended: authenticate as a GitHub App (short-lived token, nothing to
-          # rotate). The App needs Contents / Pull requests / Workflows: write.
-          app-id: ${{ vars.SYNC_APP_ID }}
-          private-key: ${{ secrets.SYNC_APP_KEY }}
-          # Fallback: a PAT with repo + workflow scopes, via `token: ${{ secrets.SYNC_PAT }}`.
-          # The default GITHUB_TOKEN cannot modify files under .github/workflows/.
+          scope: <owner>/<repo> # this repository
+          identity: keep-node-current # matches the trust policy filename
+      - uses: TimothyJones/github-action-keep-node-current@v2
+        with:
+          token: ${{ steps.octo-sts.outputs.token }}
