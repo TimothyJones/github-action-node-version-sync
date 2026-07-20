@@ -15,7 +15,12 @@ import {
   representativeStyle,
   type ParsedVersion,
 } from "./format.js";
-import type { Editor, FilePlan, VersionChange } from "./reconcile.js";
+import type {
+  CheckImpact,
+  Editor,
+  FilePlan,
+  VersionChange,
+} from "./reconcile.js";
 import type { Schedule } from "./schedule.js";
 
 const SETUP_NODE = /^actions\/setup-node(@.*)?$/;
@@ -23,14 +28,29 @@ const MATRIX_REF = /^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$/;
 
 /** A step scope: workflow jobs carry a matrix + steps; composite actions carry steps only. */
 interface Scope {
+  jobId?: string;
+  jobName?: string;
   matrix?: YAMLMap;
   steps?: YAMLSeq;
+}
+
+/** A node-version matrix array plus the info needed to name its CI status checks. */
+interface MatrixInfo {
+  seq: YAMLSeq;
+  /** The job id (key under `jobs:`); "" when unknown. */
+  jobId: string;
+  /**
+   * True when the check context is confidently `<jobId> (<value>)` — i.e. the job has
+   * a default name and `node` is the matrix's only dimension. False for custom job
+   * names or multi-dimension matrices, where the exact check name can't be derived.
+   */
+  simple: boolean;
 }
 
 /** The Node-version-bearing locations found in one document. */
 interface Analysis {
   /** Matrix arrays referenced by a setup-node `${{ matrix.KEY }}` node-version (multi-version). */
-  matrixSeqs: YAMLSeq[];
+  matrices: MatrixInfo[];
   /** Scalar setup-node node-version pins holding a concrete numeric version (single-version). */
   scalarPins: Scalar[];
 }
@@ -50,10 +70,17 @@ function collectScopes(doc: Document): Scope[] {
     for (const pair of jobs.items) {
       const job = pair.value;
       if (!isMap(job)) continue;
+      const jobId = isScalar(pair.key)
+        ? String((pair.key as Scalar).value)
+        : String(pair.key);
+      const nameNode = job.get("name");
+      const jobName = typeof nameNode === "string" ? nameNode : undefined;
       const strategy = getNode(job, "strategy");
       const matrix = isMap(strategy) ? getNode(strategy, "matrix") : undefined;
       const steps = getNode(job, "steps");
       scopes.push({
+        jobId,
+        jobName,
         matrix: isMap(matrix) ? matrix : undefined,
         steps: isSeq(steps) ? steps : undefined,
       });
@@ -75,8 +102,21 @@ function itemVersion(item: unknown): ParsedVersion | undefined {
   return parseVersionLiteral(isScalar(item) ? (item as Scalar).value : item);
 }
 
+/** True when the matrix has dimensions beyond `nodeKey`, or uses include/exclude. */
+function isMultiDimension(matrix: YAMLMap, nodeKey: string): boolean {
+  let listKeys = 0;
+  for (const pair of matrix.items) {
+    const key = isScalar(pair.key)
+      ? String((pair.key as Scalar).value)
+      : String(pair.key);
+    if (key === "include" || key === "exclude") return true;
+    if (isSeq(pair.value)) listKeys += 1;
+  }
+  return listKeys > 1 && matrix.has(nodeKey);
+}
+
 function analyze(doc: Document): Analysis {
-  const matrixSeqs: YAMLSeq[] = [];
+  const matrices: MatrixInfo[] = [];
   const scalarPins: Scalar[] = [];
 
   for (const scope of collectScopes(doc)) {
@@ -98,7 +138,16 @@ function analyze(doc: Document): Analysis {
           const seq = scope.matrix
             ? (scope.matrix.get(ref[1], true) as Node | undefined)
             : undefined;
-          if (isSeq(seq) && !matrixSeqs.includes(seq)) matrixSeqs.push(seq);
+          if (isSeq(seq) && !matrices.some((m) => m.seq === seq)) {
+            const multiDimension = scope.matrix
+              ? isMultiDimension(scope.matrix, ref[1])
+              : false;
+            matrices.push({
+              seq,
+              jobId: scope.jobId ?? "",
+              simple: Boolean(scope.jobId) && !scope.jobName && !multiDimension,
+            });
+          }
           continue;
         }
       }
@@ -112,7 +161,7 @@ function analyze(doc: Document): Analysis {
     }
   }
 
-  return { matrixSeqs, scalarPins };
+  return { matrices, scalarPins };
 }
 
 function insertMajor(seq: YAMLSeq, major: number): void {
@@ -162,12 +211,12 @@ function applyWorkflow(
   schedule: Schedule,
 ): string {
   const doc = parseDocument(content);
-  const { matrixSeqs, scalarPins } = analyze(doc);
+  const { matrices, scalarPins } = analyze(doc);
 
   if (change.kind === "add") {
-    for (const seq of matrixSeqs) insertMajor(seq, change.major);
+    for (const m of matrices) insertMajor(m.seq, change.major);
   } else {
-    for (const seq of matrixSeqs) removeMajor(seq, change.major);
+    for (const m of matrices) removeMajor(m.seq, change.major);
     if (schedule.newestEven !== undefined) {
       for (const pin of scalarPins) {
         const p = parseVersionLiteral(pin.value);
@@ -195,22 +244,52 @@ export const workflowEditor: Editor = {
     }
     if (doc.errors.length > 0 || !isMap(doc.contents)) return null;
 
-    const { matrixSeqs, scalarPins } = analyze(doc);
-    if (matrixSeqs.length === 0 && scalarPins.length === 0) return null;
+    const { matrices, scalarPins } = analyze(doc);
+    if (matrices.length === 0 && scalarPins.length === 0) return null;
 
     const changes = new Map<string, VersionChange>();
     const record = (kind: VersionChange["kind"], major: number) =>
       changes.set(`${kind}:${major}`, { kind, major });
+    const checkImpacts: CheckImpact[] = [];
 
-    for (const seq of matrixSeqs) {
-      const majors = new Set<number>();
-      for (const item of seq.items) {
+    for (const matrix of matrices) {
+      // Map each present major to its rendered string (as the CI check context spells it).
+      const present = new Map<number, string>();
+      const parsed: ParsedVersion[] = [];
+      for (const item of matrix.seq.items) {
         const p = itemVersion(item);
-        if (p) majors.add(p.major);
+        if (!p) continue;
+        present.set(
+          p.major,
+          String(isScalar(item) ? (item as Scalar).value : item),
+        );
+        parsed.push(p);
       }
-      for (const even of schedule.activeEven)
-        if (!majors.has(even)) record("add", even);
-      for (const m of majors) if (!schedule.isActive(m)) record("drop", m);
+      const style = representativeStyle(parsed);
+
+      const added: string[] = [];
+      for (const even of schedule.activeEven) {
+        if (!present.has(even)) {
+          record("add", even);
+          added.push(String(renderVersion(even, style)));
+        }
+      }
+      const removed: string[] = [];
+      for (const [m, rendered] of present) {
+        if (!schedule.isActive(m)) {
+          record("drop", m);
+          removed.push(rendered);
+        }
+      }
+
+      if (added.length || removed.length) {
+        checkImpacts.push({
+          jobId: matrix.jobId,
+          simple: matrix.simple,
+          added,
+          removed,
+        });
+      }
     }
 
     for (const pin of scalarPins) {
@@ -228,6 +307,7 @@ export const workflowEditor: Editor = {
     return {
       path,
       changes: [...changes.values()],
+      checkImpacts: checkImpacts.length ? checkImpacts : undefined,
       apply: (c, change) => applyWorkflow(c, change, schedule),
     };
   },

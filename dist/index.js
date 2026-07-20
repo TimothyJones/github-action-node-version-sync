@@ -40536,10 +40536,17 @@ function collectScopes(doc) {
             const job = pair.value;
             if (!(0,dist/* isMap */.jh)(job))
                 continue;
+            const jobId = (0,dist/* isScalar */.jn)(pair.key)
+                ? String(pair.key.value)
+                : String(pair.key);
+            const nameNode = job.get("name");
+            const jobName = typeof nameNode === "string" ? nameNode : undefined;
             const strategy = getNode(job, "strategy");
             const matrix = (0,dist/* isMap */.jh)(strategy) ? getNode(strategy, "matrix") : undefined;
             const steps = getNode(job, "steps");
             scopes.push({
+                jobId,
+                jobName,
                 matrix: (0,dist/* isMap */.jh)(matrix) ? matrix : undefined,
                 steps: (0,dist/* isSeq */.oP)(steps) ? steps : undefined,
             });
@@ -40558,8 +40565,22 @@ function collectScopes(doc) {
 function itemVersion(item) {
     return parseVersionLiteral((0,dist/* isScalar */.jn)(item) ? item.value : item);
 }
+/** True when the matrix has dimensions beyond `nodeKey`, or uses include/exclude. */
+function isMultiDimension(matrix, nodeKey) {
+    let listKeys = 0;
+    for (const pair of matrix.items) {
+        const key = (0,dist/* isScalar */.jn)(pair.key)
+            ? String(pair.key.value)
+            : String(pair.key);
+        if (key === "include" || key === "exclude")
+            return true;
+        if ((0,dist/* isSeq */.oP)(pair.value))
+            listKeys += 1;
+    }
+    return listKeys > 1 && matrix.has(nodeKey);
+}
 function analyze(doc) {
-    const matrixSeqs = [];
+    const matrices = [];
     const scalarPins = [];
     for (const scope of collectScopes(doc)) {
         if (!scope.steps)
@@ -40583,8 +40604,16 @@ function analyze(doc) {
                     const seq = scope.matrix
                         ? scope.matrix.get(ref[1], true)
                         : undefined;
-                    if ((0,dist/* isSeq */.oP)(seq) && !matrixSeqs.includes(seq))
-                        matrixSeqs.push(seq);
+                    if ((0,dist/* isSeq */.oP)(seq) && !matrices.some((m) => m.seq === seq)) {
+                        const multiDimension = scope.matrix
+                            ? isMultiDimension(scope.matrix, ref[1])
+                            : false;
+                        matrices.push({
+                            seq,
+                            jobId: scope.jobId ?? "",
+                            simple: Boolean(scope.jobId) && !scope.jobName && !multiDimension,
+                        });
+                    }
                     continue;
                 }
             }
@@ -40594,7 +40623,7 @@ function analyze(doc) {
             }
         }
     }
-    return { matrixSeqs, scalarPins };
+    return { matrices, scalarPins };
 }
 function insertMajor(seq, major) {
     const numeric = [];
@@ -40635,14 +40664,14 @@ function removeMajor(seq, major) {
 }
 function applyWorkflow(content, change, schedule) {
     const doc = (0,dist/* parseDocument */.Tp)(content);
-    const { matrixSeqs, scalarPins } = analyze(doc);
+    const { matrices, scalarPins } = analyze(doc);
     if (change.kind === "add") {
-        for (const seq of matrixSeqs)
-            insertMajor(seq, change.major);
+        for (const m of matrices)
+            insertMajor(m.seq, change.major);
     }
     else {
-        for (const seq of matrixSeqs)
-            removeMajor(seq, change.major);
+        for (const m of matrices)
+            removeMajor(m.seq, change.major);
         if (schedule.newestEven !== undefined) {
             for (const pin of scalarPins) {
                 const p = parseVersionLiteral(pin.value);
@@ -40670,24 +40699,46 @@ const workflowEditor = {
         }
         if (doc.errors.length > 0 || !(0,dist/* isMap */.jh)(doc.contents))
             return null;
-        const { matrixSeqs, scalarPins } = analyze(doc);
-        if (matrixSeqs.length === 0 && scalarPins.length === 0)
+        const { matrices, scalarPins } = analyze(doc);
+        if (matrices.length === 0 && scalarPins.length === 0)
             return null;
         const changes = new Map();
         const record = (kind, major) => changes.set(`${kind}:${major}`, { kind, major });
-        for (const seq of matrixSeqs) {
-            const majors = new Set();
-            for (const item of seq.items) {
+        const checkImpacts = [];
+        for (const matrix of matrices) {
+            // Map each present major to its rendered string (as the CI check context spells it).
+            const present = new Map();
+            const parsed = [];
+            for (const item of matrix.seq.items) {
                 const p = itemVersion(item);
-                if (p)
-                    majors.add(p.major);
+                if (!p)
+                    continue;
+                present.set(p.major, String((0,dist/* isScalar */.jn)(item) ? item.value : item));
+                parsed.push(p);
             }
-            for (const even of schedule.activeEven)
-                if (!majors.has(even))
+            const style = representativeStyle(parsed);
+            const added = [];
+            for (const even of schedule.activeEven) {
+                if (!present.has(even)) {
                     record("add", even);
-            for (const m of majors)
-                if (!schedule.isActive(m))
+                    added.push(String(renderVersion(even, style)));
+                }
+            }
+            const removed = [];
+            for (const [m, rendered] of present) {
+                if (!schedule.isActive(m)) {
                     record("drop", m);
+                    removed.push(rendered);
+                }
+            }
+            if (added.length || removed.length) {
+                checkImpacts.push({
+                    jobId: matrix.jobId,
+                    simple: matrix.simple,
+                    added,
+                    removed,
+                });
+            }
         }
         for (const pin of scalarPins) {
             const p = parseVersionLiteral(pin.value);
@@ -40703,6 +40754,7 @@ const workflowEditor = {
         return {
             path,
             changes: [...changes.values()],
+            checkImpacts: checkImpacts.length ? checkImpacts : undefined,
             apply: (c, change) => applyWorkflow(c, change, schedule),
         };
     },
@@ -40927,8 +40979,48 @@ async function upsertPullRequest(octokit, opts) {
     });
     return { url: created.data.html_url, number: created.data.number };
 }
-/** Build the PR description from the commit groups and the schedule source. */
-function buildPrBody(groups, scheduleUrl) {
+/**
+ * A checklist of branch-protection changes implied by the CI check-name changes.
+ * Empty when no matrix edits affect check names.
+ */
+function requiredCheckLines(plans) {
+    const impacts = plans
+        .flatMap((p) => p.checkImpacts ?? [])
+        .filter((i) => i.added.length || i.removed.length);
+    if (impacts.length === 0)
+        return [];
+    const lines = [
+        "### Required status checks",
+        "",
+        "This changes the names of matrix CI checks. If any are **required status checks** in",
+        "branch protection, update them to match — otherwise this PR cannot merge and later PRs",
+        "will be blocked by checks that no longer run:",
+        "",
+    ];
+    const ctx = (job, value) => `\`${job} (${value})\``;
+    for (const im of impacts) {
+        const parts = [];
+        if (im.simple) {
+            if (im.removed.length)
+                parts.push(`remove ${im.removed.map((v) => ctx(im.jobId, v)).join(", ")}`);
+            if (im.added.length)
+                parts.push(`add ${im.added.map((v) => ctx(im.jobId, v)).join(", ")}`);
+            lines.push(`- ${parts.join("; ")}`);
+        }
+        else {
+            if (im.removed.length)
+                parts.push(`removed ${im.removed.join(", ")}`);
+            if (im.added.length)
+                parts.push(`added ${im.added.join(", ")}`);
+            lines.push(`- Job \`${im.jobId || "?"}\` (custom name or multi-dimension matrix — exact check ` +
+                `names may differ): ${parts.join("; ")}. Update any required checks referencing those versions.`);
+        }
+    }
+    lines.push("");
+    return lines;
+}
+/** Build the PR description from the commit groups, file plans, and the schedule source. */
+function buildPrBody(groups, plans, scheduleUrl) {
     const lines = [];
     lines.push("Automated sync of Node.js versions against the official release schedule.");
     lines.push("");
@@ -40946,6 +41038,7 @@ function buildPrBody(groups, scheduleUrl) {
             lines.push(`- Node ${g.major}`);
         lines.push("");
     }
+    lines.push(...requiredCheckLines(plans));
     lines.push(`Source: ${scheduleUrl}`);
     return lines.join("\n");
 }
@@ -41130,7 +41223,7 @@ async function run() {
         branch,
         root,
         title,
-        body: buildPrBody(result.groups, scheduleUrl),
+        body: buildPrBody(result.groups, result.plans, scheduleUrl),
     });
     if (!pr) {
         core.info("No net changes to publish.");

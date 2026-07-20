@@ -1,5 +1,5 @@
 import type { getOctokit } from "@actions/github";
-import type { CommitGroup } from "./reconcile.js";
+import type { CommitGroup, FilePlan } from "./reconcile.js";
 
 export type Octokit = ReturnType<typeof getOctokit>;
 
@@ -55,9 +55,52 @@ export async function upsertPullRequest(
   return { url: created.data.html_url, number: created.data.number };
 }
 
-/** Build the PR description from the commit groups and the schedule source. */
+/**
+ * A checklist of branch-protection changes implied by the CI check-name changes.
+ * Empty when no matrix edits affect check names.
+ */
+function requiredCheckLines(plans: FilePlan[]): string[] {
+  const impacts = plans
+    .flatMap((p) => p.checkImpacts ?? [])
+    .filter((i) => i.added.length || i.removed.length);
+  if (impacts.length === 0) return [];
+
+  const lines = [
+    "### Required status checks",
+    "",
+    "This changes the names of matrix CI checks. If any are **required status checks** in",
+    "branch protection, update them to match — otherwise this PR cannot merge and later PRs",
+    "will be blocked by checks that no longer run:",
+    "",
+  ];
+  const ctx = (job: string, value: string) => `\`${job} (${value})\``;
+  for (const im of impacts) {
+    const parts: string[] = [];
+    if (im.simple) {
+      if (im.removed.length)
+        parts.push(
+          `remove ${im.removed.map((v) => ctx(im.jobId, v)).join(", ")}`,
+        );
+      if (im.added.length)
+        parts.push(`add ${im.added.map((v) => ctx(im.jobId, v)).join(", ")}`);
+      lines.push(`- ${parts.join("; ")}`);
+    } else {
+      if (im.removed.length) parts.push(`removed ${im.removed.join(", ")}`);
+      if (im.added.length) parts.push(`added ${im.added.join(", ")}`);
+      lines.push(
+        `- Job \`${im.jobId || "?"}\` (custom name or multi-dimension matrix — exact check ` +
+          `names may differ): ${parts.join("; ")}. Update any required checks referencing those versions.`,
+      );
+    }
+  }
+  lines.push("");
+  return lines;
+}
+
+/** Build the PR description from the commit groups, file plans, and the schedule source. */
 export function buildPrBody(
   groups: CommitGroup[],
+  plans: FilePlan[],
   scheduleUrl: string,
 ): string {
   const lines: string[] = [];
@@ -79,6 +122,8 @@ export function buildPrBody(
     for (const g of drops) lines.push(`- Node ${g.major}`);
     lines.push("");
   }
+
+  lines.push(...requiredCheckLines(plans));
 
   lines.push(`Source: ${scheduleUrl}`);
   return lines.join("\n");

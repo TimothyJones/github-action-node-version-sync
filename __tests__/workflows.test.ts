@@ -107,3 +107,62 @@ describe("scalar pins", () => {
     expect(result).toContain("lts/*");
   });
 });
+
+describe("check impacts", () => {
+  const matrixJob = (extra = "", jobName = "") =>
+    [
+      "jobs:",
+      "  test:",
+      jobName ? `    name: ${jobName}` : "",
+      "    strategy:",
+      "      matrix:",
+      `        node: [18, 20, 22]${extra}`,
+      "    steps:",
+      "      - uses: actions/setup-node@v4",
+      "        with:",
+      "          node-version: ${{ matrix.node }}",
+      "",
+    ]
+      .filter((l) => l !== "")
+      .join("\n");
+
+  it("reports exact check contexts for a simple single-dimension matrix", () => {
+    const plan = workflowEditor.plan("w.yml", matrixJob(), schedule);
+    expect(plan?.checkImpacts).toEqual([
+      { jobId: "test", simple: true, added: ["24"], removed: ["18"] },
+    ]);
+  });
+
+  it("marks a multi-dimension matrix as not simple", () => {
+    const input = [
+      "jobs:",
+      "  test:",
+      "    strategy:",
+      "      matrix:",
+      "        os: [ubuntu-latest, windows-latest]",
+      "        node: [18, 20, 22]",
+      "    steps:",
+      "      - uses: actions/setup-node@v4",
+      "        with:",
+      "          node-version: ${{ matrix.node }}",
+      "",
+    ].join("\n");
+    const plan = workflowEditor.plan("w.yml", input, schedule);
+    expect(plan?.checkImpacts?.[0]).toMatchObject({
+      jobId: "test",
+      simple: false,
+    });
+  });
+
+  it("marks a custom-named job as not simple", () => {
+    const plan = workflowEditor.plan(
+      "w.yml",
+      matrixJob("", "Node ${{ matrix.node }}"),
+      schedule,
+    );
+    expect(plan?.checkImpacts?.[0]).toMatchObject({
+      jobId: "test",
+      simple: false,
+    });
+  });
+});

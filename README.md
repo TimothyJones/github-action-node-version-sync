@@ -193,6 +193,21 @@ npm run build      # bundle src/ into dist/ with ncc (dist/ is committed)
 
 `dist/` is the compiled entrypoint and **must be committed**; CI verifies it is up to date.
 
+## Required status checks
+
+Editing a matrix changes the names of that job's CI checks — e.g. dropping Node 20 and
+adding 26 turns `build (20)` into `build (26)`. If `build (20)` is a **required status
+check** in branch protection, the PR that drops it can't merge (the check never runs) and
+later PRs break too. The action can't edit branch protection (that needs admin rights it
+isn't given), but it **flags the exact changes in the PR body** so you can update them:
+
+> ### Required status checks
+>
+> - remove `build (20)`; add `build (26)`
+
+For jobs with a custom `name:` or a multi-dimension matrix (where the check name can't be
+derived), it prints a softer note listing the changed versions instead.
+
 ## Notes and limitations
 
 - Matrix arrays are re-emitted compactly (`[20, 22, 24]`); comments and quote styles are preserved.

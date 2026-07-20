@@ -9,6 +9,21 @@ export interface VersionChange {
 }
 
 /**
+ * How editing a CI matrix changes the names of that job's status checks. Used to warn
+ * (in the PR body) that branch-protection required checks may need updating.
+ */
+export interface CheckImpact {
+  /** The job id whose matrix changed. */
+  jobId: string;
+  /** True when the check context is confidently `<jobId> (<value>)`. */
+  simple: boolean;
+  /** Rendered matrix values added (e.g. `["26"]`, `["26.x"]`). */
+  added: string[];
+  /** Rendered matrix values removed. */
+  removed: string[];
+}
+
+/**
  * The result of analysing one file: which version changes it participates in,
  * and a pure function that applies exactly one of those changes to a content
  * string. Applying changes one at a time (re-parsing each time) lets the
@@ -19,6 +34,8 @@ export interface FilePlan {
   path: string;
   /** Distinct changes this file needs; empty means the file is already in sync. */
   changes: VersionChange[];
+  /** CI status-check name changes caused by this file's matrix edits, if any. */
+  checkImpacts?: CheckImpact[];
   /** Apply a single change to the given content, returning the new content. Idempotent. */
   apply(content: string, change: VersionChange): string;
 }

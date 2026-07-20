@@ -86,7 +86,7 @@ async function run(): Promise<void> {
     branch,
     root,
     title,
-    body: buildPrBody(result.groups, scheduleUrl),
+    body: buildPrBody(result.groups, result.plans, scheduleUrl),
   });
 
   if (!pr) {
