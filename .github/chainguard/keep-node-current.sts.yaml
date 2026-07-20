@@ -2,7 +2,9 @@
 # Lets the self-test workflow, running on main, mint a short-lived token with
 # exactly the permissions this action needs. Inert until the app is installed.
 issuer: https://token.actions.githubusercontent.com
-subject: repo:TimothyJones/github-action-keep-node-current:ref:refs/heads/main
+# GitHub's OIDC subject embeds the account and repository IDs; pinning them makes
+# the policy robust against owner/repo renames being claimed by someone else.
+subject: repo:TimothyJones@914369/github-action-keep-node-current@1304665141:ref:refs/heads/main
 
 permissions:
   contents: write

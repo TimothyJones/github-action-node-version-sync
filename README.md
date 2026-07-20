@@ -101,8 +101,11 @@ settings, nothing to expire or rotate. The trust policy is reviewable code.
 
    ```yaml
    issuer: https://token.actions.githubusercontent.com
-   # Only this repo's sync workflow, running on main, may mint this token:
-   subject: repo:<owner>/<repo>:ref:refs/heads/main
+   # Only this repo's sync workflow, running on main, may mint this token.
+   # GitHub's OIDC subject embeds account/repo IDs (owner@id/repo@id); either match
+   # them with a pattern, or pin the exact subject (copy it from the octo-sts error
+   # on a first run) for a rename-proof policy:
+   subject_pattern: "repo:<owner>(@[0-9]+)?/<repo>(@[0-9]+)?:ref:refs/heads/main"
 
    permissions:
      contents: write
