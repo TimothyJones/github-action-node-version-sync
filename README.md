@@ -64,66 +64,67 @@ jobs:
       - uses: actions/checkout@v4
       - uses: TimothyJones/github-action-keep-node-current@v1
         with:
-          # Required to edit workflow files — see the token note below.
-          token: ${{ secrets.SYNC_PAT }}
+          # Authenticate as a GitHub App (recommended). See "Authentication" below.
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_KEY }}
 ```
 
-> **Token — important.** Because this action edits files under `.github/workflows/`, the
-> default `GITHUB_TOKEN` is **not sufficient** — GitHub refuses commits that create or
-> update workflow files unless the token has the `workflow` scope. See
-> [Setting up the token](#setting-up-the-token) below.
->
-> (The default `GITHUB_TOKEN` works only if none of the changed files are workflows —
-> e.g. you limit scope to `.nvmrc` / `package.json` via the `paths` input.)
+> **Why not the default `GITHUB_TOKEN`?** Because this action edits files under
+> `.github/workflows/`, and GitHub refuses to create or update workflow files unless the
+> credential has the `workflow` scope — which `GITHUB_TOKEN` lacks. See
+> [Authentication](#authentication).
 
-## Setting up the token
+## Authentication
 
 The action commits, branches, and opens the PR entirely through the GitHub API, so it
-needs no special `actions/checkout` configuration — just a token with the **`workflow`**
-scope so it can edit workflow files. Set one up in three steps.
+needs no special `actions/checkout` configuration — just a credential allowed to edit
+workflow files (the `workflow` scope / **Workflows: write** permission).
 
-### 1. Create the token
+### Recommended — a GitHub App
 
-**Option A — Fine-grained PAT (recommended, least privilege):**
+A GitHub App is the intended path for CI automation: it mints a **short-lived
+installation token** per run (nothing to rotate — no expiring PAT), it isn't tied to a
+person, and PRs it opens can trigger other workflows.
 
-1. Go to **Settings → Developer settings → Fine-grained personal access tokens → Generate new token**
-   (<https://github.com/settings/personal-access-tokens/new>).
-2. **Resource owner:** you or your org · **Repository access:** _Only select repositories_ →
-   choose the repo(s) that will run the action.
-3. Under **Permissions → Repository permissions**, set each of these to _Read and write_:
-   - **Contents**
-   - **Pull requests**
-   - **Workflows**
-4. Generate the token and copy it.
+1. **Create the App** — **Settings → Developer settings → GitHub Apps → New GitHub App**.
+   Under **Repository permissions** grant **Contents: Read and write**,
+   **Pull requests: Read and write**, and **Workflows: Read and write**. Generate a
+   **private key** (downloads a `.pem`).
+2. **Install it** on the repositories that will run the action.
+3. **Store the credentials** — the App id as a variable and the private key as a secret:
+   ```bash
+   gh variable set SYNC_APP_ID   --repo <owner>/<repo> --body <app-id>
+   gh secret   set SYNC_APP_KEY  --repo <owner>/<repo> < path/to/private-key.pem
+   ```
+4. **Reference them** (as in [Usage](#usage) above):
+   ```yaml
+   with:
+     app-id: ${{ vars.SYNC_APP_ID }}
+     private-key: ${{ secrets.SYNC_APP_KEY }}
+   ```
 
-**Option B — Classic PAT (simplest):**
+The action mints the installation token itself — no extra steps. (Alternatively, mint the
+token with the official [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token)
+and pass it via `token:`.)
 
-1. Go to **Settings → Developer settings → Tokens (classic) → Generate new token**
-   (<https://github.com/settings/tokens/new>).
-2. Select the **`repo`** and **`workflow`** scopes.
-3. Generate the token and copy it.
+### Simpler fallback — a Personal Access Token
 
-**Option C — GitHub App token:** an installation token with `contents: write`,
-`pull-requests: write` and `workflows: write` also works, and is a good fit for orgs.
+If you don't want to set up an App, use a PAT via the `token` input. Note PATs expire and
+are tied to your account, so you'll have to rotate them.
 
-### 2. Store it as a secret
+- **Fine-grained PAT:** _Only select repositories_ → the target repo(s); permissions
+  **Contents**, **Pull requests**, and **Workflows** = _Read and write_.
+- **Classic PAT:** the `repo` and `workflow` scopes.
 
-Add the token as a repository (or organisation) secret, e.g. `SYNC_PAT`:
-
-```bash
-gh secret set SYNC_PAT --repo <owner>/<repo>
-# then paste the token when prompted
-```
-
-Or via **Settings → Secrets and variables → Actions → New repository secret**.
-
-### 3. Reference it in the workflow
+Store it as a secret and pass it in:
 
 ```yaml
-- uses: TimothyJones/github-action-keep-node-current@v1
-  with:
-    token: ${{ secrets.SYNC_PAT }}
+with:
+  token: ${{ secrets.SYNC_PAT }}
 ```
+
+The default `GITHUB_TOKEN` works **only** if none of the changed files are workflows
+(e.g. you limit scope to `.nvmrc` / `package.json` via the `paths` input).
 
 ### Also required
 
@@ -140,7 +141,9 @@ workflows, such as CI.
 
 | Input          | Default                   | Description                                                                          |
 | -------------- | ------------------------- | ------------------------------------------------------------------------------------ |
-| `token`        | `${{ github.token }}`     | Token used to create the commits/branch and open the PR (via the GitHub API).        |
+| `app-id`       | _(none)_                  | GitHub App id. With `private-key`, authenticates as the App (recommended).           |
+| `private-key`  | _(none)_                  | GitHub App private key (PEM). Required alongside `app-id`.                           |
+| `token`        | `${{ github.token }}`     | Token used when `app-id`/`private-key` are not set. Needs the `workflow` scope.      |
 | `schedule-url` | Node.js `schedule.json`   | URL (or local path) of the release schedule.                                         |
 | `base`         | repo default branch       | Base branch the PR targets.                                                          |
 | `branch`       | `chore/node-version-sync` | Working branch the PR is opened from.                                                |

@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: TimothyJones/github-action-keep-node-current@v1
         with:
-          # A classic PAT with repo + workflow scopes (or a GitHub App token with
-          # contents/pull-requests/workflows write). The default GITHUB_TOKEN cannot
-          # push changes to files under .github/workflows/.
-          token: ${{ secrets.SYNC_PAT }}
+          # Recommended: authenticate as a GitHub App (short-lived token, nothing to
+          # rotate). The App needs Contents / Pull requests / Workflows: write.
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_KEY }}
+          # Fallback: a PAT with repo + workflow scopes, via `token: ${{ secrets.SYNC_PAT }}`.
+          # The default GITHUB_TOKEN cannot modify files under .github/workflows/.

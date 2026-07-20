@@ -7,9 +7,17 @@ branding:
 
 inputs:
   token:
-    description: "Token used to create the commits/branch and open the pull request via the GitHub API. Needs the workflow scope to edit workflow files. Defaults to the workflow token."
+    description: "Token used to create the commits/branch and open the pull request via the GitHub API. Needs the workflow scope to edit workflow files. Used only when app-id/private-key are not set. Defaults to the workflow token."
     required: false
     default: ${{ github.token }}
+  app-id:
+    description: "GitHub App id. When set together with private-key, the action authenticates as the App (recommended) instead of using token."
+    required: false
+    default: ""
+  private-key:
+    description: "GitHub App private key (PEM). Required alongside app-id for App authentication."
+    required: false
+    default: ""
   schedule-url:
     description: "URL (or local file path) of the Node.js release schedule JSON."
     required: false

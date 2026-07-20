@@ -6,6 +6,7 @@ import { prTitle } from "./reconcile.js";
 import { buildSchedule, fetchSchedule } from "./schedule.js";
 import { buildPrBody } from "./pr.js";
 import { publishChanges } from "./publish.js";
+import { resolveOctokit } from "./auth.js";
 
 function parseNow(raw: string): Date {
   if (!raw.trim()) return new Date();
@@ -24,6 +25,8 @@ function parsePaths(raw: string): string[] {
 
 async function run(): Promise<void> {
   const token = core.getInput("token");
+  const appId = core.getInput("app-id");
+  const privateKey = core.getInput("private-key");
   const scheduleUrl = core.getInput("schedule-url");
   const branch = core.getInput("branch") || "chore/node-version-sync";
   const dryRun = core.getBooleanInput("dry-run");
@@ -78,7 +81,14 @@ async function run(): Promise<void> {
     return;
   }
 
-  const octokit = github.getOctokit(token);
+  const { octokit, via } = await resolveOctokit({
+    token,
+    appId,
+    privateKey,
+    owner,
+    repo,
+  });
+  core.info(`Authenticated via ${via === "app" ? "GitHub App" : "token"}.`);
   const pr = await publishChanges(octokit, result, {
     owner,
     repo,
